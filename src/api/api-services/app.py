@@ -1,13 +1,34 @@
 from datetime import date, datetime, time
 
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_from_directory
 from pydantic import BaseModel, ValidationError
 from sqlalchemy import func
+from flask_swagger_ui import get_swaggerui_blueprint
+import os
 
 from generator.main import get_session, Service, Slot, Booking
 
 
 app = Flask(__name__)
+
+@app.route("/docs/openapi.yml")
+def openapi_spec():
+    docs_dir = os.path.join(os.path.dirname(__file__), "docs")
+    return send_from_directory(docs_dir, "openapi.yml")
+
+# 2) Configuración de Swagger UI
+SWAGGER_URL = "/docs"         # URL donde estará UI
+API_URL = "/docs/openapi.yml" # Ruta donde tu app sirve el spec
+
+swaggerui_blueprint = get_swaggerui_blueprint(
+    SWAGGER_URL,
+    API_URL,
+    config={                     # Opciones de configuración
+        "app_name": "API Servicios Gimnasio & Sauna"
+    },
+)
+
+app.register_blueprint(swaggerui_blueprint, url_prefix=SWAGGER_URL)
 
 
 class BookingCreate(BaseModel):

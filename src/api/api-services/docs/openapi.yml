@@ -1,0 +1,221 @@
+openapi: 3.0.3
+info:
+  title: API Servicios Gimnasio & Sauna
+  description: >
+    API REST para consultar la disponibilidad y gestionar reservas
+    de los servicios de gimnasio y sauna.
+  version: 1.0.0
+servers:
+  - url: http://localhost:8000
+    description: Servidor local de desarrollo
+tags:
+  - name: Disponibilidad
+    description: Operaciones para consultar disponibilidad de franjas horarias
+  - name: Reservas
+    description: Operaciones para crear reservas en franjas horarias
+paths:
+  /availability:
+    post:
+      tags:
+        - Disponibilidad
+      summary: Obtener disponibilidad de un servicio
+      description: |
+        Dada la fecha (o fecha-hora) y el nombre del servicio ("gimnasio" o "sauna"),
+        devuelve hasta 3 franjas horarias disponibles con su capacidad y reservas actuales.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                service_name:
+                  type: string
+                  description: Nombre del servicio
+                  enum:
+                    - gimnasio
+                    - sauna
+                start_time:
+                  description: >
+                    Fecha o fecha-hora en ISO 8601.  
+                    - Si es solo fecha ("YYYY-MM-DD"), devuelve hasta 3 franjas del día.  
+                    - Si incluye hora ("YYYY-MM-DDThh:mm:ss"), devuelve solo esa franja.
+                  oneOf:
+                    - type: string
+                      format: date
+                    - type: string
+                      format: date-time
+              required:
+                - service_name
+                - start_time
+      responses:
+        '200':
+          description: Lista de disponibilidades
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Availability'
+        '400':
+          description: Petición inválida (falta o mal formato de campos)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Servicio no encontrado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /booking:
+    post:
+      tags:
+        - Reservas
+      summary: Crear una reserva
+      description: |
+        Reserva una plaza en la franja horaria indicada. 
+        Verifica capacidad y gestiona conflictos.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BookingCreate'
+      responses:
+        '201':
+          description: Reserva creada correctamente
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BookingResponse'
+        '400':
+          description: Cuerpo de la petición no es JSON
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Franja horaria (slot) no existe
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: No hay huecos disponibles en la franja
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Datos de entrada inválidos (errores de validación)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationErrorResponse'
+        '500':
+          description: Error interno del servidor
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+components:
+  schemas:
+    Availability:
+      type: object
+      properties:
+        slot_id:
+          type: integer
+          description: Identificador de la franja
+        start_time:
+          type: string
+          format: date-time
+          description: Fecha y hora de inicio en ISO 8601
+        total_capacity:
+          type: integer
+          description: Capacidad total de la franja
+        current_bookings:
+          type: integer
+          description: Número de reservas ya realizadas
+        available_slots:
+          type: integer
+          description: Plazas libres restantes
+      required:
+        - slot_id
+        - start_time
+        - total_capacity
+        - current_bookings
+        - available_slots
+
+    BookingCreate:
+      type: object
+      description: Datos para crear una reserva
+      properties:
+        slot_id:
+          type: integer
+          description: Identificador de la franja a reservar
+        guest_name:
+          type: string
+          description: Nombre del usuario que realiza la reserva
+      required:
+        - slot_id
+        - guest_name
+
+    BookingResponse:
+      type: object
+      description: Datos devueltos tras crear una reserva
+      properties:
+        id:
+          type: integer
+          description: Identificador de la reserva
+        slot_id:
+          type: integer
+          description: Franja reservada
+        guest_name:
+          type: string
+          description: Nombre del huésped
+      required:
+        - id
+        - slot_id
+        - guest_name
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+          description: Mensaje de error
+      required:
+        - error
+
+    ValidationErrorDetail:
+      type: object
+      properties:
+        loc:
+          type: array
+          items:
+            type: string
+        msg:
+          type: string
+        type:
+          type: string
+      required:
+        - loc
+        - msg
+        - type
+
+    ValidationErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+          description: Mensaje general de error de validación
+        details:
+          type: array
+          description: Lista de errores de campo
+          items:
+            $ref: '#/components/schemas/ValidationErrorDetail'
+      required:
+        - error
+        - details
