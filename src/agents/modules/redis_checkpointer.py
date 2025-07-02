@@ -35,6 +35,9 @@ class RedisCheckpointer(BaseCheckpointSaver):
     
     def _make_redis_key(self, thread_id: str, checkpoint_ns: str = "default") -> str:
         """Construye la key Redis para un thread específico."""
+        # ✅ FIX: Asegurar que checkpoint_ns no sea vacío
+        if not checkpoint_ns:
+            checkpoint_ns = "default"
         return f"{REDIS_PREFIX}:{thread_id}:{checkpoint_ns}"
     
     def _make_metadata_key(self, thread_id: str, checkpoint_ns: str = "default") -> str:
@@ -145,13 +148,15 @@ class RedisCheckpointer(BaseCheckpointSaver):
             raise
     
     def get_tuple(self, config: RunnableConfig) -> Optional[CheckpointTuple]:
-        """
-        Obtiene el checkpoint más reciente para un thread_id dado.
-        Implementación requerida por BaseCheckpointSaver.
-        """
         try:
             thread_id = config["configurable"]["thread_id"]
             checkpoint_ns = config["configurable"].get("checkpoint_ns", "default")
+            
+            # ✅ FIX: Asegurar que checkpoint_ns nunca sea None o vacío
+            if not checkpoint_ns:
+                checkpoint_ns = "default"
+                
+            logger.debug(f"🔧 [GET] thread_id: {thread_id}, checkpoint_ns: {checkpoint_ns}")
             
             redis_key = self._make_redis_key(thread_id, checkpoint_ns)
             metadata_key = self._make_metadata_key(thread_id, checkpoint_ns)
@@ -217,13 +222,15 @@ class RedisCheckpointer(BaseCheckpointSaver):
         metadata: CheckpointMetadata,
         new_versions: Dict[str, Any],
     ) -> RunnableConfig:
-        """
-        Guarda un checkpoint en Redis.
-        Implementación requerida por BaseCheckpointSaver.
-        """
         try:
             thread_id = config["configurable"]["thread_id"]
             checkpoint_ns = config["configurable"].get("checkpoint_ns", "default")
+            
+            # ✅ FIX: Asegurar que checkpoint_ns nunca sea None o vacío
+            if not checkpoint_ns:
+                checkpoint_ns = "default"
+            
+            logger.debug(f"🔧 [PUT] thread_id: {thread_id}, checkpoint_ns: {checkpoint_ns}")
             
             redis_key = self._make_redis_key(thread_id, checkpoint_ns)
             metadata_key = self._make_metadata_key(thread_id, checkpoint_ns)
