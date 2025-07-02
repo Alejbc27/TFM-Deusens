@@ -222,6 +222,7 @@ def chat_with_agent():
                 log_execution_metric("ejecucion_con_booking", total_execution_time)
 
         # ✅ VERIFICACIÓN FINAL
+        final_message_count = existing_message_count  # Default value
         if redis_checkpointer:
             session_info_after = redis_checkpointer.get_session_info(thread_id)
             if session_info_after:
@@ -245,7 +246,7 @@ def chat_with_agent():
             "tools_used": list(tools_used),
             "conversation_length": total_messages,
             "session_existed": session_exists,  # ✅ INFO ADICIONAL PARA DEBUG
-            "message_increment": final_message_count - existing_message_count if redis_checkpointer else 0
+            "message_increment": final_message_count - existing_message_count        
         })
 
     except Exception as e:

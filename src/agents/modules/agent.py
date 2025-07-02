@@ -139,12 +139,18 @@ class RagAgent:
             except:
                 pass
 
-        # Actualizar estado después del LLM
-        new_messages = messages + [ai_response]
-        updated_state = update_state_after_llm({**state, 'messages': new_messages})
-        
-        logger.debug(f"🤖 [Agent] Devolviendo estado con {len(updated_state['messages'])} mensajes")
-        return updated_state
+        # ✅ CAMBIO CLAVE: Actualizar estado y devolver solo los mensajes NUEVOS
+        temp_state = {**state, 'messages': messages + [ai_response]}
+        updated_state = update_state_after_llm(temp_state)
+
+        # Obtener solo los mensajes que se añadieron después del LLM
+        new_messages = updated_state['messages'][len(messages):]
+
+        logger.info(f"🤖 [Agent] Devolviendo {len(new_messages)} mensajes nuevos")
+        logger.debug(f"🤖 [Agent] Nuevos mensajes: {[type(m).__name__ for m in new_messages]}")
+
+        # ✅ DEVOLVER SOLO LOS MENSAJES NUEVOS
+        return {'messages': new_messages}
 
     def tools_node(self, state: AgentState) -> dict:
         """Nodo de herramientas simplificado."""
