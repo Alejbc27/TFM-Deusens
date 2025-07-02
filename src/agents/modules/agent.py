@@ -80,6 +80,7 @@ class RagAgent:
     def should_continue(self, state: AgentState) -> str:
         """
         Determina el siguiente paso en el flujo del agente.
+        Incluye workaround para modelos que devuelven JSON en lugar de tool_calls.
         
         Returns:
             'continue' para ejecutar herramientas, 'end' para finalizar
@@ -87,15 +88,68 @@ class RagAgent:
         messages = state['messages']
         last_message = messages[-1] if messages else None
         
+        logger.debug("🔍 [Router] Analizando último mensaje...")
+        
         if isinstance(last_message, (ToolMessage, HumanMessage)):
+            logger.debug("🔍 [Router] -> Mensaje de herramienta/usuario, continuar con agente")
             return 'continue'
         
         if isinstance(last_message, AIMessage):
+            # Verificar tool_calls nativos primero
             if hasattr(last_message, 'tool_calls') and last_message.tool_calls:
-                return 'continue'
-            else:
-                return 'end'
+                tool_name = last_message.tool_calls[0].get('name', 'N/A')
+                if tool_name in self._tools_map:
+                    logger.info(f"🔍 [Router] -> Tool call nativo detectado: {tool_name}")
+                    return 'continue'
+                else:
+                    logger.warning(f"🔍 [Router] -> Tool desconocido: {tool_name}, ignorando")
+                    last_message.tool_calls = []
+                    return 'end'
+            
+            # 🚨 WORKAROUND CRÍTICO: Verificar JSON content para Qwen
+            if isinstance(last_message.content, str) and last_message.content.strip().startswith("{"):
+                try:
+                    content_json = json.loads(last_message.content)
+                    logger.debug(f"🔍 [Router] JSON detectado: {content_json}")
+                    
+                    if (isinstance(content_json, dict) and 
+                        "tool" in content_json and 
+                        "tool_input" in content_json):
+                        
+                        tool_name = content_json["tool"]
+                        tool_args = content_json["tool_input"]
+                        
+                        if tool_name in self._tools_map and isinstance(tool_args, dict):
+                            logger.info(f"🔧 [Router WORKAROUND] JSON -> Tool call: {tool_name}")
+                            
+                            # Convertir JSON a tool_call nativo
+                            last_message.tool_calls = [{
+                                "name": tool_name, 
+                                "args": tool_args, 
+                                "id": f"qwen_tc_{uuid.uuid4().hex}"
+                            }]
+                            last_message.content = ""  # Limpiar contenido JSON
+                            
+                            logger.info(f"🔧 [Router WORKAROUND] Tool call reconstruido: {last_message.tool_calls}")
+                            return 'continue'
+                        else:
+                            logger.warning(f"🔧 [Router WORKAROUND] Tool desconocido o args inválidos: {tool_name}")
+                    
+                    elif isinstance(content_json, dict) and "answer" in content_json:
+                        logger.info("🔍 [Router] JSON con 'answer' detectado, respuesta directa")
+                        last_message.content = content_json["answer"]
+                        last_message.tool_calls = []
+                        return 'end'
+                        
+                except json.JSONDecodeError:
+                    logger.debug("🔍 [Router] Contenido no es JSON válido")
+                except Exception as e:
+                    logger.error(f"🔍 [Router WORKAROUND] Error procesando JSON: {e}")
+            
+            logger.info(f"🔍 [Router] -> Respuesta final sin herramientas")
+            return 'end'
         
+        logger.debug("🔍 [Router] -> Tipo de mensaje desconocido, finalizar")
         return 'end'
 
     def agent_node(self, state: AgentState) -> dict:
