@@ -33,24 +33,20 @@ class RagAgent:
             logger.error(f"❌ ERROR inicializando LLM ({ollama_model_name}): {e}\n{traceback.format_exc()}")
             raise
 
-        # Definición del Grafo - MANTENER LA ESTRUCTURA ORIGINAL
+        # ✅ SOLUCIÓN: Simplificar el grafo para evitar duplicación
         workflow = StateGraph(AgentState)
-        workflow.add_node('call_llm', self.call_llm_node)
-        workflow.add_node('invoke_tools_node', self.invoke_tools_node)
-        workflow.add_node('update_state_after_llm', self.update_state_after_llm)
-        workflow.add_node('update_state_after_tool', self.update_state_after_tool)
+        workflow.add_node('agent', self.agent_node)  # Nodo principal unificado
+        workflow.add_node('tools', self.tools_node)
 
-        workflow.set_entry_point('call_llm')
+        workflow.set_entry_point('agent')
         
-        # Flujo original mantenido
-        workflow.add_edge('call_llm', 'update_state_after_llm')
+        # ✅ FLUJO SIMPLIFICADO
         workflow.add_conditional_edges(
-            'update_state_after_llm',
-            self.should_invoke_tool_router,
-            {'invoke_tool': 'invoke_tools_node', 'respond_directly': END}
+            'agent',
+            self.should_continue,
+            {'continue': 'tools', 'end': END}
         )
-        workflow.add_edge('invoke_tools_node', 'update_state_after_tool')
-        workflow.add_edge('update_state_after_tool', 'call_llm')
+        workflow.add_edge('tools', 'agent')  # Tools regresa al agent
         
         try:
             redis_checkpointer = RedisCheckpointer()
@@ -61,77 +57,51 @@ class RagAgent:
             self.graph = workflow.compile(checkpointer=MemorySaver())
             logger.warning("⚠️ Usando MemorySaver como fallback - Las conversaciones no persistirán")
 
-    def update_state_after_llm(self, state: AgentState) -> AgentState:
-        """Wrapper to call the state update function from the state module."""
-        return update_state_after_llm(state)
-
-    def update_state_after_tool(self, state: AgentState) -> AgentState:
-        """Wrapper to call the state update function from the state module."""
-        check_gym_availability = self._tools_map.get('check_gym_availability')
-        book_gym_slot = self._tools_map.get('book_gym_slot')
-        return update_state_after_tool(state, check_gym_availability, book_gym_slot)
-
-    def should_invoke_tool_router(self, state: AgentState) -> str:
-        logger.debug("  [Router: Decidiendo siguiente paso...]")
-        last_message = state['messages'][-1] if state['messages'] else None
-        if not isinstance(last_message, AIMessage):
-            logger.warning("    [Router] Último mensaje no es AIMessage.")
-            return 'respond_directly'
-
-        if hasattr(last_message, 'tool_calls') and isinstance(last_message.tool_calls, list) and last_message.tool_calls:
-            tool_name = last_message.tool_calls[0].get('name', 'N/A')
-            if tool_name in self._tools_map:
-                logger.info(f"    [Router] LLM solicitó herramienta vía .tool_calls: '{tool_name}'.")
-                return 'invoke_tool'
-            else:
-                logger.warning(f"    [Router] LLM solicitó herramienta desconocida vía .tool_calls: '{tool_name}'. Ignorando.")
-                last_message.tool_calls = []
-                return 'respond_directly'
-        
-        if isinstance(last_message.content, str) and last_message.content.strip().startswith("{"):
-            try:
-                content_json = json.loads(last_message.content)
-                logger.debug(f"    [Router] Contenido de AIMessage parseado como JSON: {content_json}")
-                if isinstance(content_json, dict) and "tool" in content_json and "tool_input" in content_json:
-                    tool_name = content_json["tool"]
-                    tool_args = content_json["tool_input"]
-                    if tool_name in self._tools_map and isinstance(tool_args, dict):
-                        logger.warning(f"    [Router WORKAROUND] Detectada llamada a herramienta '{tool_name}' en .content.")
-                        last_message.tool_calls = [{"name": tool_name, "args": tool_args, "id": f"qwen_tc_{uuid.uuid4().hex}"}]
-                        last_message.content = "" 
-                        logger.info(f"    [Router WORKAROUND] .tool_calls reconstruido: {last_message.tool_calls}")
-                        return 'invoke_tool'
-                    else:
-                        logger.warning(f"    [Router WORKAROUND] JSON en .content parece tool_call pero nombre ('{tool_name}') desconocido o args no dict.")
-                elif isinstance(content_json, dict) and "answer" in content_json:
-                    logger.info("    [Router] LLM devolvió JSON con 'answer', tratando como respuesta directa.")
-                    last_message.content = content_json["answer"]
-                    last_message.tool_calls = []
-                    return 'respond_directly'
-            except json.JSONDecodeError:
-                logger.debug(f"    [Router] Contenido no era JSON de tool_call esperado: '{last_message.content[:100]}...'")
-            except Exception as e:
-                logger.error(f"    [Router WORKAROUND] Error inesperado procesando content_json: {e}\n{traceback.format_exc()}")
-
-        logger.info(f"    [Router] LLM no solicitó herramienta. tool_calls: {getattr(last_message, 'tool_calls', 'N/A')}, content: '{str(last_message.content)[:100]}...'")
-        return 'respond_directly'
-
-    def call_llm_node(self, state: AgentState) -> dict:
+    def should_continue(self, state: AgentState) -> str:
+        """Decide si continuar con tools o terminar."""
         messages = state['messages']
+        last_message = messages[-1] if messages else None
         
-        # ✅ LOGGING MEJORADO: Contar tipos de mensajes
+        logger.debug(f"  [Router] Último mensaje: {type(last_message).__name__ if last_message else 'None'}")
+        
+        # Si es un mensaje de herramienta o del usuario, el agente debe responder
+        if isinstance(last_message, (ToolMessage, HumanMessage)):
+            logger.debug("  [Router] -> Necesita respuesta del agente")
+            return 'continue'
+        
+        # Si es respuesta del agente con tool_calls, ejecutar herramientas
+        if isinstance(last_message, AIMessage):
+            if hasattr(last_message, 'tool_calls') and last_message.tool_calls:
+                logger.debug("  [Router] -> Ejecutar herramientas")
+                return 'continue'
+            else:
+                logger.debug("  [Router] -> Fin (respuesta final)")
+                return 'end'
+        
+        return 'end'
+
+    def agent_node(self, state: AgentState) -> dict:
+        """Nodo principal que combina LLM y lógica de estado."""
+        messages = state['messages']
+        last_message = messages[-1] if messages else None
+        
+        # Logging del estado actual
         human_count = sum(1 for m in messages if isinstance(m, HumanMessage))
         ai_count = sum(1 for m in messages if isinstance(m, AIMessage))
         tool_count = sum(1 for m in messages if isinstance(m, ToolMessage))
-        logger.info(f"  [LLM Node] Estado actual: {len(messages)} mensajes total (Human:{human_count}, AI:{ai_count}, Tool:{tool_count})")
+        logger.info(f"🤖 [Agent] Estado: {len(messages)} mensajes (H:{human_count}, AI:{ai_count}, T:{tool_count})")
         
-        # Crear el system prompt, inyectando el scratchpad
+        # Si el último mensaje es ToolMessage, actualizar estado primero
+        if isinstance(last_message, ToolMessage):
+            logger.debug("🔄 Actualizando estado después de herramienta...")
+            state = self.update_state_after_tool(state)
+
+        # Preparar mensajes para el LLM
         agent_scratchpad_content = get_current_agent_scratchpad(state)
-        
         current_messages_for_llm = []
         system_prompt_with_scratchpad = RAG_SYSTEM_PROMPT.replace("{{agent_scratchpad}}", agent_scratchpad_content)
 
-        # Asegurar que el SystemMessage sea el primero y único
+        # Procesar mensajes
         has_system_message = False
         for m in messages:
             if isinstance(m, SystemMessage):
@@ -142,98 +112,83 @@ class RagAgent:
         
         if not has_system_message:
             current_messages_for_llm.insert(0, SystemMessage(content=system_prompt_with_scratchpad))
-            logger.info("    [LLM Node] Se antepuso RAG_SYSTEM_PROMPT con scratchpad.")
-        else:
-            logger.info("    [LLM Node] SystemMessage actualizado con scratchpad.")
 
-        model_name_for_log = getattr(self._llm, 'model', getattr(getattr(self._llm, 'llm', None), 'model', 'modelo_desconocido'))
-        logger.info(f"  [LLM Node] Llamando al LLM ({model_name_for_log}) con {len(current_messages_for_llm)} mensajes.")
-        if current_messages_for_llm: 
-            logger.debug(f"    Último mensaje al LLM: {type(current_messages_for_llm[-1]).__name__} {str(current_messages_for_llm[-1].content)[:100]}...")
-        
+        # Llamar al LLM
+        logger.info(f"🤖 Llamando al LLM con {len(current_messages_for_llm)} mensajes...")
         try:
-            ai_message_response = self._llm.invoke(current_messages_for_llm)
+            ai_response = self._llm.invoke(current_messages_for_llm)
+            logger.info(f"🤖 Respuesta LLM: {str(ai_response.content)[:100]}...")
         except Exception as e:
-            logger.error(f"❌ ERROR durante la invocación del LLM: {e}\n{traceback.format_exc()}")
-            ai_message_response = AIMessage(content=f"Error al procesar con LLM: {e}", tool_calls=[])
-        
-        if not hasattr(ai_message_response, 'tool_calls') or not isinstance(ai_message_response.tool_calls, list):
-            ai_message_response.tool_calls = [] 
-        
-        logger.info(f"    Respuesta CRUDA del LLM (AIMessage): tool_calls={ai_message_response.tool_calls}, content='{str(ai_message_response.content)[:200]}...'")
-        
-        # ✅ MANTENER LA LÓGICA ORIGINAL - Solo devolver el nuevo mensaje
-        logger.debug(f"  [LLM Node] Devolviendo 1 nuevo AIMessage")
-        return {'messages': [ai_message_response]}
+            logger.error(f"❌ ERROR en LLM: {e}")
+            ai_response = AIMessage(content=f"Error: {e}", tool_calls=[])
 
-    def invoke_tools_node(self, state: AgentState) -> dict:  # ✅ CAMBIO: dict en lugar de AgentState
-        logger.info("  [Tools Node] Intentando invocar herramientas.")
+        if not hasattr(ai_response, 'tool_calls'):
+            ai_response.tool_calls = []
+
+        # Procesar respuesta JSON si es necesario (workaround para Qwen)
+        if isinstance(ai_response.content, str) and ai_response.content.strip().startswith("{"):
+            try:
+                content_json = json.loads(ai_response.content)
+                if isinstance(content_json, dict) and "tool" in content_json and "tool_input" in content_json:
+                    tool_name = content_json["tool"]
+                    tool_args = content_json["tool_input"]
+                    if tool_name in self._tools_map:
+                        ai_response.tool_calls = [{"name": tool_name, "args": tool_args, "id": f"tc_{uuid.uuid4().hex}"}]
+                        ai_response.content = ""
+                        logger.info(f"🔧 Workaround: Convertido JSON a tool_call: {tool_name}")
+            except:
+                pass
+
+        # Actualizar estado después del LLM
+        new_messages = messages + [ai_response]
+        updated_state = update_state_after_llm({**state, 'messages': new_messages})
         
-        # ✅ LOGGING MEJORADO
+        logger.debug(f"🤖 [Agent] Devolviendo estado con {len(updated_state['messages'])} mensajes")
+        return updated_state
+
+    def tools_node(self, state: AgentState) -> dict:
+        """Nodo de herramientas simplificado."""
         messages = state['messages']
-        human_count = sum(1 for m in messages if isinstance(m, HumanMessage))
-        ai_count = sum(1 for m in messages if isinstance(m, AIMessage))
-        tool_count = sum(1 for m in messages if isinstance(m, ToolMessage))
-        logger.info(f"  [Tools Node] Estado actual: {len(messages)} mensajes total (Human:{human_count}, AI:{ai_count}, Tool:{tool_count})")
+        last_message = messages[-1] if messages else None
         
-        last_ai_message = messages[-1] 
-
-        if not (isinstance(last_ai_message, AIMessage) and hasattr(last_ai_message, 'tool_calls') and \
-                isinstance(last_ai_message.tool_calls, list) and len(last_ai_message.tool_calls) > 0):
-            error_msg = "Error: AIMessage inválida o sin tool_calls para invocación en invoke_tools_node."
-            logger.error(f"    [Tools Node] {error_msg} tool_calls: {getattr(last_ai_message, 'tool_calls', 'NoAttr')}")
-            
-            # ✅ CAMBIO: Devolver solo los mensajes nuevos
-            error_tool_message = ToolMessage(content=error_msg, tool_call_id="error_no_valid_tool_calls")
-            logger.debug(f"  [Tools Node] Devolviendo 1 ToolMessage de error")
-            return {"messages": [error_tool_message]}
+        logger.info(f"🔧 [Tools] Procesando herramientas...")
+        
+        if not isinstance(last_message, AIMessage) or not hasattr(last_message, 'tool_calls') or not last_message.tool_calls:
+            logger.error("🔧 No hay tool_calls válidos")
+            return state  # Devolver estado sin cambios
 
         tool_messages = []
-        for tool_call in last_ai_message.tool_calls:
+        for tool_call in last_message.tool_calls:
             if not isinstance(tool_call, dict):
-                logger.error(f"    [Tools Node] Elemento tool_call no es un dict: {tool_call}")
-                tool_messages.append(ToolMessage(content=f"Error: tool_call malformado: {tool_call}", tool_call_id=f"err_tc_{uuid.uuid4().hex}"))
                 continue
-
+                
             tool_name = tool_call.get('name')
             tool_args = tool_call.get('args')
-            tool_call_id = tool_call.get('id', f"tc_{uuid.uuid4().hex}") 
+            tool_call_id = tool_call.get('id', f"tc_{uuid.uuid4().hex}")
 
-            if not tool_name or not isinstance(tool_args, dict):
-                error_msg = f"Error: llamada a herramienta malformada. Nombre: '{tool_name}', Args: {type(tool_args)}"
-                logger.error(f"    [Tools Node] {error_msg}")
-                tool_messages.append(ToolMessage(content=error_msg, tool_call_id=tool_call_id, name=tool_name or "unknown_tool"))
-                continue
-            
-            logger.info(f"    [Tools Node] Invocando herramienta: '{tool_name}' con args: {tool_args}")
             if tool_name not in self._tools_map:
-                result_content = f"Error: Herramienta desconocida o no disponible: '{tool_name}'."
-                logger.error(f"    [Tools Node] {result_content}")
+                result = f"Error: Herramienta '{tool_name}' no disponible"
             else:
-                try: 
-                    valid_args = True; missing_args = []
-                    if tool_name == 'book_gym_slot':
-                        if 'booking_date' not in tool_args: missing_args.append('booking_date')
-                        if 'user_name' not in tool_args: missing_args.append('user_name')
-                    elif tool_name == 'check_gym_availability' and 'target_date' not in tool_args:
-                        missing_args.append('target_date')
-                    elif tool_name == 'external_rag_search_tool' and 'query' not in tool_args:
-                        missing_args.append('query')
-                    
-                    if missing_args:
-                        result_content = f"Error: Para '{tool_name}' faltan los argumentos requeridos: {', '.join(missing_args)}. Argumentos recibidos: {tool_args}"
-                        logger.warning(f"    [Tools Node] {result_content}"); valid_args = False
-                    if valid_args: 
-                        result_content = self._tools_map[tool_name].invoke(tool_args)
+                try:
+                    result = self._tools_map[tool_name].invoke(tool_args)
+                    logger.info(f"🔧 Herramienta '{tool_name}' ejecutada")
                 except Exception as e:
-                    logger.error(f"      [Tools Node] ERROR ejecutando herramienta {tool_name}: {e}\n{traceback.format_exc()}")
-                    result_content = f"Error al ejecutar la herramienta {tool_name}: {str(e)}"
-            
-            tool_messages.append(ToolMessage(tool_call_id=tool_call_id, name=tool_name, content=result_content))
-            logger.info(f"    [Tools Node] Herramienta '{tool_name}' invocada. Resultado añadido.")
-        
-        logger.info(f"    [Tools Node] Todos las tool_calls procesadas. {len(tool_messages)} ToolMessages generados.")
-        
-        # ✅ CAMBIO PRINCIPAL: Solo devolver los nuevos ToolMessages
-        logger.debug(f"  [Tools Node] Devolviendo {len(tool_messages)} ToolMessages nuevos")
-        return {"messages": tool_messages}
+                    result = f"Error ejecutando {tool_name}: {e}"
+                    logger.error(f"🔧 Error en herramienta '{tool_name}': {e}")
+
+            tool_messages.append(ToolMessage(
+                content=result,
+                tool_call_id=tool_call_id,
+                name=tool_name
+            ))
+
+        # Devolver estado actualizado con los tool messages
+        new_messages = messages + tool_messages
+        logger.debug(f"🔧 [Tools] Devolviendo estado con {len(new_messages)} mensajes")
+        return {**state, 'messages': new_messages}
+
+    def update_state_after_tool(self, state: AgentState) -> AgentState:
+        """Wrapper para actualización de estado después de herramientas."""
+        check_gym_availability = self._tools_map.get('check_gym_availability')
+        book_gym_slot = self._tools_map.get('book_gym_slot')
+        return update_state_after_tool(state, check_gym_availability, book_gym_slot)
