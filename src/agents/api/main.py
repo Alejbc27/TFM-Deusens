@@ -85,7 +85,7 @@ def before_request_func():
 @app.route('/chat', methods=['POST'])
 def chat_with_agent():
     """
-    Endpoint principal para interacción con el agente.  
+    Endpoint principal para interacción con el agente.
     Maneja persistencia automática de conversaciones.
     """
     start_time = time.time()
@@ -115,25 +115,8 @@ def chat_with_agent():
     # Configuración para LangGraph
     config = {"configurable": {"thread_id": thread_id}}
     
-    # ✅ CORRECCIÓN: Obtener estado existente y añadir el nuevo mensaje
-    try:
-        # Obtener el estado actual de la conversación
-        current_state = agent_instance.graph.get_state(config)
-        
-        if current_state and current_state.values and current_state.values.get('messages'):
-            # Conversación existente - añadir el nuevo mensaje
-            existing_messages = current_state.values['messages']
-            new_human_message = HumanMessage(content=message)
-            input_for_graph = {"messages": existing_messages + [new_human_message]}
-            logger.info(f"🔄 Conversación existente: {len(existing_messages)} mensajes previos + 1 nuevo = {len(existing_messages) + 1}")
-        else:
-            # Nueva conversación - solo el mensaje del usuario
-            input_for_graph = {"messages": [HumanMessage(content=message)]}
-            logger.info(f"🆕 Nueva conversación iniciada para thread '{thread_id}'")
-            
-    except Exception as e:
-        logger.warning(f"Error obteniendo estado previo: {e}. Tratando como nueva conversación.")
-        input_for_graph = {"messages": [HumanMessage(content=message)]}
+    # ✅ SOLUCIÓN: Solo pasar el nuevo mensaje, LangGraph maneja la persistencia
+    input_for_graph = {"messages": [HumanMessage(content=message)]}
 
     try:
         # Obtener info de sesión antes del procesamiento
@@ -142,44 +125,38 @@ def chat_with_agent():
             session_info_before = redis_checkpointer.get_session_info(thread_id)
             if session_info_before:
                 logger.info(f"📊 Sesión existente encontrada: {session_info_before.get('message_count', 0)} mensajes anteriores")
-
-        # PROCESAR CON TRACKING DE HERRAMIENTAS
-        final_event_state = None
-        for event in agent_instance.graph.stream(input_for_graph, config=config, stream_mode="values"):
-            final_event_state = event
-            # DETECTAR HERRAMIENTAS USADAS
-            if event.get('messages'):
-                for msg in event['messages']:
-                    if hasattr(msg, 'tool_calls') and msg.tool_calls:
-                        for tool_call in msg.tool_calls:
-                            if isinstance(tool_call, dict) and 'name' in tool_call:
-                                tool_name = tool_call['name']
-                                if tool_name == 'external_rag_search_tool':
-                                    tools_used.add('rag')
-                                elif tool_name == 'check_gym_availability':
-                                    tools_used.add('availability')
-                                elif tool_name == 'book_gym_slot':
-                                    tools_used.add('booking')
-            logger.debug(f"📊 Evento del stream: {len(event.get('messages', []))} mensajes en estado")
-
-        # Obtener estado final
-        if final_event_state and final_event_state.get('messages'):
-            final_agent_message = final_event_state['messages'][-1]
-            total_messages = len(final_event_state['messages'])
-            logger.info(f"✅ Estado final obtenido del stream: {type(final_agent_message).__name__}")
-            logger.info(f"📊 Total de mensajes en conversación: {total_messages}")
-        else:
-            logger.info("🔄 Obteniendo estado final desde Redis...")
-            final_graph_state = agent_instance.graph.get_state(config)
-            
-            if final_graph_state and final_graph_state.values and final_graph_state.values.get('messages'):
-                final_agent_message = final_graph_state.values['messages'][-1]
-                total_messages = len(final_graph_state.values['messages'])
-                logger.info(f"✅ Estado final obtenido desde Redis: {type(final_agent_message).__name__}")
-                logger.info(f"📊 Total de mensajes en Redis: {total_messages}")
             else:
-                logger.error(f"❌ No se pudo obtener estado final para thread '{thread_id}'")
-                return jsonify({"error": "No se pudo obtener la respuesta final del agente."}), 500
+                logger.info(f"🆕 Nueva sesión iniciada para thread '{thread_id}'")
+
+        # ✅ CAMBIO CLAVE: Usar invoke en lugar de stream para evitar duplicación
+        logger.info(f"🚀 Invocando grafo para thread '{thread_id}'...")
+        
+        # Usar invoke que es más directo que stream
+        final_state = agent_instance.graph.invoke(input_for_graph, config=config)
+        
+        logger.info(f"✅ Grafo completado. Estado final contiene {len(final_state.get('messages', []))} mensajes")
+
+        # Obtener el último mensaje (respuesta del agente)
+        if final_state and final_state.get('messages'):
+            final_agent_message = final_state['messages'][-1]
+            total_messages = len(final_state['messages'])
+            logger.info(f"✅ Último mensaje: {type(final_agent_message).__name__}")
+            
+            # DETECTAR HERRAMIENTAS USADAS del estado final
+            for msg in final_state['messages']:
+                if hasattr(msg, 'tool_calls') and msg.tool_calls:
+                    for tool_call in msg.tool_calls:
+                        if isinstance(tool_call, dict) and 'name' in tool_call:
+                            tool_name = tool_call['name']
+                            if tool_name == 'external_rag_search_tool':
+                                tools_used.add('rag')
+                            elif tool_name == 'check_gym_availability':
+                                tools_used.add('availability')
+                            elif tool_name == 'book_gym_slot':
+                                tools_used.add('booking')
+        else:
+            logger.error(f"❌ No se pudo obtener estado final para thread '{thread_id}'")
+            return jsonify({"error": "No se pudo obtener la respuesta final del agente."}), 500
 
         # Manejar diferentes tipos de mensajes finales
         if isinstance(final_agent_message, AIMessage):
@@ -228,7 +205,7 @@ def chat_with_agent():
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "execution_time": round(total_execution_time, 3),
             "tools_used": list(tools_used),
-            "conversation_length": total_messages  # ✅ AÑADIR INFO DE DEBUG
+            "conversation_length": total_messages
         })
 
     except Exception as e:
