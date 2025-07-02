@@ -105,7 +105,7 @@ def chat_with_agent():
     if len(message) > 2000:
         return jsonify({"error": "Mensaje demasiado largo (máximo 2000 caracteres)."}), 400
 
-    # ✅ MEJORA: Manejo consistente del thread_id
+    # ✅ MANEJO CONSISTENTE DEL THREAD_ID
     if 'thread_id' not in data or not data['thread_id']:
         thread_id = f'user-fab1an12-{int(time.time())}'
         logger.info(f"🆕 Generando nuevo thread_id: {thread_id}")
@@ -121,62 +121,60 @@ def chat_with_agent():
     # Configuración para LangGraph
     config = {"configurable": {"thread_id": thread_id}}
     
-    # ✅ MANTENIDO: Solo pasar el nuevo mensaje, LangGraph maneja la persistencia automáticamente
-    input_for_graph = {"messages": [HumanMessage(content=message)]}
-
     try:
-        # ✅ LOGGING DETALLADO: Estado ANTES del procesamiento
-        try:
-            state_before = agent_instance.graph.get_state(config)
-            if state_before and state_before.values and state_before.values.get('messages'):
-                messages_before = state_before.values['messages']
-                human_count = sum(1 for m in messages_before if isinstance(m, HumanMessage))
-                ai_count = sum(1 for m in messages_before if isinstance(m, AIMessage))
-                tool_count = sum(1 for m in messages_before if isinstance(m, ToolMessage))
-                logger.info(f"🔍 Estado ANTES: {len(messages_before)} mensajes (H:{human_count}, AI:{ai_count}, T:{tool_count})")
-                
-                # Mostrar últimos 2 mensajes para debug
-                for i, msg in enumerate(messages_before[-2:]):
-                    idx = len(messages_before) - 2 + i
-                    logger.debug(f"   [{idx}] {type(msg).__name__}: {str(msg.content)[:50]}...")
-            else:
-                logger.info("🔍 Estado ANTES: Sin mensajes previos (nueva conversación)")
-        except Exception as e:
-            logger.warning(f"No se pudo obtener estado previo: {e}")
-
-        # Obtener info de sesión antes del procesamiento
-        session_info_before = None
-        if redis_checkpointer:
-            session_info_before = redis_checkpointer.get_session_info(thread_id)
-            if session_info_before:
-                logger.info(f"📊 RedisCheckpointer ANTES: {session_info_before.get('message_count', 0)} mensajes")
-            else:
-                logger.info(f"📊 RedisCheckpointer ANTES: Nueva sesión para thread '{thread_id}'")
-
-        # ✅ CAMBIO CLAVE: Usar invoke en lugar de stream
-        logger.info(f"🚀 Invocando grafo para thread '{thread_id}' con mensaje: '{message[:50]}...'")
+        # ✅ VERIFICACIÓN DIRECTA CON REDIS ANTES DE INVOCAR
+        session_exists = False
+        existing_message_count = 0
         
-        # Invocar el grafo - LangGraph maneja la persistencia automáticamente
+        if redis_checkpointer:
+            try:
+                # Verificar directamente en Redis
+                redis_key = f"agent_session:{thread_id}:default"
+                exists = redis_checkpointer.redis_client.exists(redis_key)
+                
+                if exists:
+                    session_info = redis_checkpointer.get_session_info(thread_id)
+                    if session_info:
+                        existing_message_count = session_info.get('message_count', 0)
+                        session_exists = True
+                        logger.info(f"🔍 Conversación existente: {existing_message_count} mensajes previos")
+                    else:
+                        logger.info(f"🔍 Redis key existe pero sin metadata")
+                else:
+                    logger.info(f"🔍 Nueva conversación para thread '{thread_id}'")
+                    
+            except Exception as e:
+                logger.warning(f"Error verificando estado en Redis: {e}")
+
+        # Input para el grafo
+        input_for_graph = {"messages": [HumanMessage(content=message)]}
+        logger.info(f"🚀 Invocando grafo con mensaje: '{message[:50]}...'")
+
+        # ✅ INVOCAR GRAFO Y ANALIZAR RESULTADO
         final_state = agent_instance.graph.invoke(input_for_graph, config=config)
         
-        # ✅ LOGGING DETALLADO: Estado DESPUÉS del procesamiento
         if final_state and final_state.get('messages'):
             messages_after = final_state['messages']
             human_count = sum(1 for m in messages_after if isinstance(m, HumanMessage))
             ai_count = sum(1 for m in messages_after if isinstance(m, AIMessage))
             tool_count = sum(1 for m in messages_after if isinstance(m, ToolMessage))
-            logger.info(f"✅ Estado DESPUÉS: {len(messages_after)} mensajes (H:{human_count}, AI:{ai_count}, T:{tool_count})")
+            total_messages = len(messages_after)
             
-            # Mostrar últimos 3 mensajes para debug
-            for i, msg in enumerate(messages_after[-3:]):
-                idx = len(messages_after) - 3 + i
-                logger.debug(f"   [{idx}] {type(msg).__name__}: {str(msg.content)[:50]}...")
+            logger.info(f"✅ Estado final: {total_messages} mensajes (H:{human_count}, AI:{ai_count}, T:{tool_count})")
+            
+            # ✅ VERIFICAR LÓGICA DE CONTINUIDAD
+            expected_human_count = existing_message_count // 2 + 1 if session_exists else 1
+            if human_count != expected_human_count:
+                logger.warning(f"⚠️ INCONSISTENCIA: Esperábamos {expected_human_count} HumanMessages, encontramos {human_count}")
+                
+                # Log detallado de mensajes
+                logger.info(f"📝 DETALLE DE MENSAJES:")
+                for i, msg in enumerate(messages_after):
+                    logger.info(f"   [{i}] {type(msg).__name__}: {str(msg.content)[:50]}...")
             
             final_agent_message = messages_after[-1]
-            total_messages = len(messages_after)
-            logger.info(f"✅ Último mensaje: {type(final_agent_message).__name__}")
             
-            # DETECTAR HERRAMIENTAS USADAS del estado final
+            # DETECTAR HERRAMIENTAS USADAS
             for msg in messages_after:
                 if hasattr(msg, 'tool_calls') and msg.tool_calls:
                     for tool_call in msg.tool_calls:
@@ -210,7 +208,7 @@ def chat_with_agent():
             response_content = "El agente procesó su consulta pero no generó una respuesta textual."
             logger.warning(f"Respuesta vacía para thread {thread_id}")
 
-        # REGISTRAR MÉTRICAS DE EJECUCIÓN
+        # REGISTRAR MÉTRICAS
         total_execution_time = time.time() - start_time
         
         if not tools_used:
@@ -223,34 +221,31 @@ def chat_with_agent():
             if 'booking' in tools_used:
                 log_execution_metric("ejecucion_con_booking", total_execution_time)
 
-        # ✅ VERIFICACIÓN FINAL: Comparar mensajes antes y después
+        # ✅ VERIFICACIÓN FINAL
         if redis_checkpointer:
             session_info_after = redis_checkpointer.get_session_info(thread_id)
             if session_info_after:
-                messages_before_count = session_info_before.get('message_count', 0) if session_info_before else 0
-                messages_after_count = session_info_after.get('message_count', 0)
-                message_increase = messages_after_count - messages_before_count
+                final_message_count = session_info_after.get('message_count', 0)
+                increment = final_message_count - existing_message_count
+                logger.info(f"📊 RESUMEN: {existing_message_count} -> {final_message_count} mensajes (+{increment})")
                 
-                logger.info(f"📊 RESUMEN: Mensajes antes: {messages_before_count}, después: {messages_after_count}, incremento: {message_increase}")
-                
-                if message_increase < 2:
-                    logger.warning(f"⚠️ POSIBLE PROBLEMA: Solo se añadieron {message_increase} mensajes, esperábamos al menos 2")
-                else:
-                    logger.info(f"✅ ÉXITO: Se añadieron {message_increase} mensajes correctamente")
+                if increment < 2:
+                    logger.warning(f"⚠️ PROBLEMA: Solo se añadieron {increment} mensajes, esperábamos al menos 2")
             else:
-                logger.warning("📊 RedisCheckpointer DESPUÉS: No se pudo obtener info de sesión")
+                logger.warning("📊 No se pudo obtener info final de sesión")
 
-        # Logging de la respuesta
-        logger.info(f"💬 Respuesta del agente para '{thread_id}': '{response_content[:100]}{'...' if len(response_content) > 100 else ''}'")
-        logger.info(f"📊 Tiempo total de ejecución: {total_execution_time:.3f}s, Herramientas usadas: {tools_used}")
+        logger.info(f"💬 Respuesta: '{response_content[:100]}{'...' if len(response_content) > 100 else ''}'")
+        logger.info(f"📊 Tiempo: {total_execution_time:.3f}s, Herramientas: {tools_used}")
 
         return jsonify({
             "response": response_content,
-            "thread_id": thread_id,  # ✅ IMPORTANTE: Devolver el thread_id para uso futuro
+            "thread_id": thread_id,
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "execution_time": round(total_execution_time, 3),
             "tools_used": list(tools_used),
-            "conversation_length": total_messages
+            "conversation_length": total_messages,
+            "session_existed": session_exists,  # ✅ INFO ADICIONAL PARA DEBUG
+            "message_increment": final_message_count - existing_message_count if redis_checkpointer else 0
         })
 
     except Exception as e:
