@@ -88,16 +88,27 @@ class RagAgent:
         messages = state['messages']
         last_message = messages[-1] if messages else None
         
-        logger.debug("🔍 [Router] Analizando último mensaje...")
+        logger.info("🔍 [Router] ========== INICIO DEBUG ==========")
+        logger.info(f"🔍 [Router] Total mensajes: {len(messages)}")
+        logger.info(f"🔍 [Router] Último mensaje tipo: {type(last_message).__name__ if last_message else 'None'}")
+        
+        if last_message:
+            logger.info(f"🔍 [Router] Contenido: '{str(last_message.content)[:100]}...'")
+            logger.info(f"🔍 [Router] Tiene tool_calls: {hasattr(last_message, 'tool_calls')}")
+            if hasattr(last_message, 'tool_calls'):
+                logger.info(f"🔍 [Router] Tool_calls valor: {last_message.tool_calls}")
         
         if isinstance(last_message, (ToolMessage, HumanMessage)):
-            logger.debug("🔍 [Router] -> Mensaje de herramienta/usuario, continuar con agente")
+            logger.info("🔍 [Router] -> Mensaje de herramienta/usuario, continuar con agente")
             return 'continue'
         
         if isinstance(last_message, AIMessage):
+            logger.info("🔍 [Router] Es AIMessage, analizando...")
+            
             # Verificar tool_calls nativos primero
             if hasattr(last_message, 'tool_calls') and last_message.tool_calls:
                 tool_name = last_message.tool_calls[0].get('name', 'N/A')
+                logger.info(f"🔍 [Router] Tool call nativo encontrado: {tool_name}")
                 if tool_name in self._tools_map:
                     logger.info(f"🔍 [Router] -> Tool call nativo detectado: {tool_name}")
                     return 'continue'
@@ -107,49 +118,71 @@ class RagAgent:
                     return 'end'
             
             # 🚨 WORKAROUND CRÍTICO: Verificar JSON content para Qwen
-            if isinstance(last_message.content, str) and last_message.content.strip().startswith("{"):
-                try:
-                    content_json = json.loads(last_message.content)
-                    logger.debug(f"🔍 [Router] JSON detectado: {content_json}")
-                    
-                    if (isinstance(content_json, dict) and 
-                        "tool" in content_json and 
-                        "tool_input" in content_json):
-                        
-                        tool_name = content_json["tool"]
-                        tool_args = content_json["tool_input"]
-                        
-                        if tool_name in self._tools_map and isinstance(tool_args, dict):
-                            logger.info(f"🔧 [Router WORKAROUND] JSON -> Tool call: {tool_name}")
-                            
-                            # Convertir JSON a tool_call nativo
-                            last_message.tool_calls = [{
-                                "name": tool_name, 
-                                "args": tool_args, 
-                                "id": f"qwen_tc_{uuid.uuid4().hex}"
-                            }]
-                            last_message.content = ""  # Limpiar contenido JSON
-                            
-                            logger.info(f"🔧 [Router WORKAROUND] Tool call reconstruido: {last_message.tool_calls}")
-                            return 'continue'
-                        else:
-                            logger.warning(f"🔧 [Router WORKAROUND] Tool desconocido o args inválidos: {tool_name}")
-                    
-                    elif isinstance(content_json, dict) and "answer" in content_json:
-                        logger.info("🔍 [Router] JSON con 'answer' detectado, respuesta directa")
-                        last_message.content = content_json["answer"]
-                        last_message.tool_calls = []
-                        return 'end'
-                        
-                except json.JSONDecodeError:
-                    logger.debug("🔍 [Router] Contenido no es JSON válido")
-                except Exception as e:
-                    logger.error(f"🔍 [Router WORKAROUND] Error procesando JSON: {e}")
+            logger.info("🔍 [Router] Verificando contenido JSON...")
+            logger.info(f"🔍 [Router] Content type: {type(last_message.content)}")
+            logger.info(f"🔍 [Router] Content: '{str(last_message.content)}'")
             
-            logger.info(f"🔍 [Router] -> Respuesta final sin herramientas")
+            if isinstance(last_message.content, str):
+                logger.info("🔍 [Router] Contenido es string")
+                stripped_content = last_message.content.strip()
+                logger.info(f"🔍 [Router] Empieza con '{{': {stripped_content.startswith('{')}")
+                
+                if stripped_content.startswith("{"):
+                    logger.info("🔍 [Router] Intentando parsear JSON...")
+                    try:
+                        content_json = json.loads(stripped_content)
+                        logger.info(f"🔍 [Router] JSON parseado exitosamente: {content_json}")
+                        logger.info(f"🔍 [Router] JSON keys: {list(content_json.keys()) if isinstance(content_json, dict) else 'No es dict'}")
+                        
+                        if (isinstance(content_json, dict) and 
+                            "tool" in content_json and 
+                            "tool_input" in content_json):
+                            
+                            tool_name = content_json["tool"]
+                            tool_args = content_json["tool_input"]
+                            
+                            logger.info(f"🔍 [Router] Tool detectado en JSON: {tool_name}")
+                            logger.info(f"🔍 [Router] Args type: {type(tool_args)}")
+                            logger.info(f"🔍 [Router] Tool existe en map: {tool_name in self._tools_map}")
+                            
+                            if tool_name in self._tools_map and isinstance(tool_args, dict):
+                                logger.info(f"🔧 [Router WORKAROUND] Convirtiendo JSON -> Tool call: {tool_name}")
+                                
+                                # Convertir JSON a tool_call nativo
+                                last_message.tool_calls = [{
+                                    "name": tool_name, 
+                                    "args": tool_args, 
+                                    "id": f"qwen_tc_{uuid.uuid4().hex}"
+                                }]
+                                last_message.content = ""  # Limpiar contenido JSON
+                                
+                                logger.info(f"🔧 [Router WORKAROUND] Tool call reconstruido: {last_message.tool_calls}")
+                                logger.info("🔍 [Router] -> CONTINUE para ejecutar herramienta")
+                                return 'continue'
+                            else:
+                                logger.warning(f"🔧 [Router WORKAROUND] Tool desconocido o args inválidos: {tool_name}")
+                        
+                        elif isinstance(content_json, dict) and "answer" in content_json:
+                            logger.info("🔍 [Router] JSON con 'answer' detectado, respuesta directa")
+                            last_message.content = content_json["answer"]
+                            last_message.tool_calls = []
+                            return 'end'
+                        else:
+                            logger.info("🔍 [Router] JSON no tiene estructura de tool esperada")
+                            
+                    except json.JSONDecodeError as e:
+                        logger.warning(f"🔍 [Router] Error parseando JSON: {e}")
+                    except Exception as e:
+                        logger.error(f"🔍 [Router WORKAROUND] Error procesando JSON: {e}")
+                else:
+                    logger.info("🔍 [Router] Contenido no empieza con '{'")
+            else:
+                logger.info("🔍 [Router] Contenido no es string")
+            
+            logger.info("🔍 [Router] -> Respuesta final sin herramientas")
             return 'end'
         
-        logger.debug("🔍 [Router] -> Tipo de mensaje desconocido, finalizar")
+        logger.info("🔍 [Router] -> Tipo de mensaje desconocido, finalizar")
         return 'end'
 
     def agent_node(self, state: AgentState) -> dict:
