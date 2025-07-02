@@ -3,7 +3,7 @@ import uuid
 import json
 from datetime import datetime
 
-from langchain_core.messages import SystemMessage, AIMessage, ToolMessage
+from langchain_core.messages import SystemMessage, AIMessage, ToolMessage, HumanMessage
 from langchain_ollama import ChatOllama
 from langchain_core.utils.function_calling import convert_to_openai_tool
 from langgraph.checkpoint.memory import MemorySaver
@@ -26,37 +26,33 @@ class RagAgent:
             tools_as_json_schema = [convert_to_openai_tool(tool) for tool in tools]
             self._llm = ChatOllama(
                 model=ollama_model_name,
-                temperature=0.05, # Un poco de temperatura para mejor conversación post-tool
-                # format="json", # Eliminado para Qwen, confiando en el workaround y schema
+                temperature=0.05,
             ).bind(tools=tools_as_json_schema)
             logger.info(f"🤖 LLM del Agente ({ollama_model_name}) inicializado. Herramientas vinculadas: {[t.name for t in tools]}.")
         except Exception as e:
             logger.error(f"❌ ERROR inicializando LLM ({ollama_model_name}): {e}\n{traceback.format_exc()}")
             raise
 
-        # Definición del Grafo
+        # Definición del Grafo - MANTENER LA ESTRUCTURA ORIGINAL
         workflow = StateGraph(AgentState)
         workflow.add_node('call_llm', self.call_llm_node)
         workflow.add_node('invoke_tools_node', self.invoke_tools_node)
-        # Nuevo nodo para actualizar el estado después de la respuesta del LLM (antes de decidir la herramienta)
         workflow.add_node('update_state_after_llm', self.update_state_after_llm)
-        # Nuevo nodo para actualizar el estado después de la ejecución de la herramienta
         workflow.add_node('update_state_after_tool', self.update_state_after_tool)
 
         workflow.set_entry_point('call_llm')
         
-        # Flujo: LLM -> update_state_after_llm -> Router -> (Tool o END)
+        # Flujo original mantenido
         workflow.add_edge('call_llm', 'update_state_after_llm')
         workflow.add_conditional_edges(
-            'update_state_after_llm', # El router ahora decide después de que el estado se haya actualizado con la última respuesta del LLM
+            'update_state_after_llm',
             self.should_invoke_tool_router,
             {'invoke_tool': 'invoke_tools_node', 'respond_directly': END}
         )
-        # Flujo: Tool -> update_state_after_tool -> LLM
         workflow.add_edge('invoke_tools_node', 'update_state_after_tool')
         workflow.add_edge('update_state_after_tool', 'call_llm')
+        
         try:
-            # Inicializar Redis Checkpointer
             redis_checkpointer = RedisCheckpointer()
             self.graph = workflow.compile(checkpointer=redis_checkpointer)
             logger.info("✅ Grafo del agente compilado con RedisCheckpointer.")
@@ -71,7 +67,6 @@ class RagAgent:
 
     def update_state_after_tool(self, state: AgentState) -> AgentState:
         """Wrapper to call the state update function from the state module."""
-        # Get tool references from the tools map
         check_gym_availability = self._tools_map.get('check_gym_availability')
         book_gym_slot = self._tools_map.get('book_gym_slot')
         return update_state_after_tool(state, check_gym_availability, book_gym_slot)
@@ -124,21 +119,22 @@ class RagAgent:
     def call_llm_node(self, state: AgentState) -> dict:
         messages = state['messages']
         
+        # ✅ LOGGING MEJORADO: Contar tipos de mensajes
+        human_count = sum(1 for m in messages if isinstance(m, HumanMessage))
+        ai_count = sum(1 for m in messages if isinstance(m, AIMessage))
+        tool_count = sum(1 for m in messages if isinstance(m, ToolMessage))
+        logger.info(f"  [LLM Node] Estado actual: {len(messages)} mensajes total (Human:{human_count}, AI:{ai_count}, Tool:{tool_count})")
+        
         # Crear el system prompt, inyectando el scratchpad
         agent_scratchpad_content = get_current_agent_scratchpad(state)
-        # logger.debug(f"    [LLM Node] Contenido del Scratchpad: {agent_scratchpad_content}")
         
-        # Reemplazar el placeholder en el RAG_SYSTEM_PROMPT
-        # O añadirlo como un mensaje separado. Añadirlo como mensaje es más limpio.
         current_messages_for_llm = []
         system_prompt_with_scratchpad = RAG_SYSTEM_PROMPT.replace("{{agent_scratchpad}}", agent_scratchpad_content)
 
         # Asegurar que el SystemMessage sea el primero y único
-        # y que el scratchpad esté actualizado
         has_system_message = False
         for m in messages:
             if isinstance(m, SystemMessage):
-                # Reemplazar el system message existente con el actualizado (con scratchpad)
                 current_messages_for_llm.append(SystemMessage(content=system_prompt_with_scratchpad))
                 has_system_message = True
             else:
@@ -152,7 +148,8 @@ class RagAgent:
 
         model_name_for_log = getattr(self._llm, 'model', getattr(getattr(self._llm, 'llm', None), 'model', 'modelo_desconocido'))
         logger.info(f"  [LLM Node] Llamando al LLM ({model_name_for_log}) con {len(current_messages_for_llm)} mensajes.")
-        if current_messages_for_llm: logger.debug(f"    Último mensaje al LLM: {type(current_messages_for_llm[-1]).__name__} {str(current_messages_for_llm[-1].content)[:100]}...")
+        if current_messages_for_llm: 
+            logger.debug(f"    Último mensaje al LLM: {type(current_messages_for_llm[-1]).__name__} {str(current_messages_for_llm[-1].content)[:100]}...")
         
         try:
             ai_message_response = self._llm.invoke(current_messages_for_llm)
@@ -165,25 +162,34 @@ class RagAgent:
         
         logger.info(f"    Respuesta CRUDA del LLM (AIMessage): tool_calls={ai_message_response.tool_calls}, content='{str(ai_message_response.content)[:200]}...'")
         
-        # Devolver solo el nuevo AIMessage para ser añadido al estado.
-        # Los nodos de actualización de estado se encargarán de modificar el estado existente.
+        # ✅ MANTENER LA LÓGICA ORIGINAL - Solo devolver el nuevo mensaje
+        logger.debug(f"  [LLM Node] Devolviendo 1 nuevo AIMessage")
         return {'messages': [ai_message_response]}
 
-    def invoke_tools_node(self, state: AgentState) -> AgentState:
+    def invoke_tools_node(self, state: AgentState) -> dict:  # ✅ CAMBIO: dict en lugar de AgentState
         logger.info("  [Tools Node] Intentando invocar herramientas.")
-        last_ai_message = state['messages'][-1] 
+        
+        # ✅ LOGGING MEJORADO
+        messages = state['messages']
+        human_count = sum(1 for m in messages if isinstance(m, HumanMessage))
+        ai_count = sum(1 for m in messages if isinstance(m, AIMessage))
+        tool_count = sum(1 for m in messages if isinstance(m, ToolMessage))
+        logger.info(f"  [Tools Node] Estado actual: {len(messages)} mensajes total (Human:{human_count}, AI:{ai_count}, Tool:{tool_count})")
+        
+        last_ai_message = messages[-1] 
 
         if not (isinstance(last_ai_message, AIMessage) and hasattr(last_ai_message, 'tool_calls') and \
                 isinstance(last_ai_message.tool_calls, list) and len(last_ai_message.tool_calls) > 0):
             error_msg = "Error: AIMessage inválida o sin tool_calls para invocación en invoke_tools_node."
             logger.error(f"    [Tools Node] {error_msg} tool_calls: {getattr(last_ai_message, 'tool_calls', 'NoAttr')}")
-            # Devolver el estado actual con un ToolMessage de error añadido.
-            # El grafo espera que los nodos devuelvan el estado completo o un dict para actualizarlo.
-            return {**state, "messages": state["messages"] + [ToolMessage(content=error_msg, tool_call_id="error_no_valid_tool_calls")]}
+            
+            # ✅ CAMBIO: Devolver solo los mensajes nuevos
+            error_tool_message = ToolMessage(content=error_msg, tool_call_id="error_no_valid_tool_calls")
+            logger.debug(f"  [Tools Node] Devolviendo 1 ToolMessage de error")
+            return {"messages": [error_tool_message]}
 
         tool_messages = []
         for tool_call in last_ai_message.tool_calls:
-            # ... (lógica de invocación de herramienta igual que antes) ...
             if not isinstance(tool_call, dict):
                 logger.error(f"    [Tools Node] Elemento tool_call no es un dict: {tool_call}")
                 tool_messages.append(ToolMessage(content=f"Error: tool_call malformado: {tool_call}", tool_call_id=f"err_tc_{uuid.uuid4().hex}"))
@@ -217,7 +223,8 @@ class RagAgent:
                     if missing_args:
                         result_content = f"Error: Para '{tool_name}' faltan los argumentos requeridos: {', '.join(missing_args)}. Argumentos recibidos: {tool_args}"
                         logger.warning(f"    [Tools Node] {result_content}"); valid_args = False
-                    if valid_args: result_content = self._tools_map[tool_name].invoke(tool_args)
+                    if valid_args: 
+                        result_content = self._tools_map[tool_name].invoke(tool_args)
                 except Exception as e:
                     logger.error(f"      [Tools Node] ERROR ejecutando herramienta {tool_name}: {e}\n{traceback.format_exc()}")
                     result_content = f"Error al ejecutar la herramienta {tool_name}: {str(e)}"
@@ -226,5 +233,7 @@ class RagAgent:
             logger.info(f"    [Tools Node] Herramienta '{tool_name}' invocada. Resultado añadido.")
         
         logger.info(f"    [Tools Node] Todos las tool_calls procesadas. {len(tool_messages)} ToolMessages generados.")
-        # Devolver el estado actual con los nuevos ToolMessages añadidos.
-        return {**state, "messages": state["messages"] + tool_messages} 
+        
+        # ✅ CAMBIO PRINCIPAL: Solo devolver los nuevos ToolMessages
+        logger.debug(f"  [Tools Node] Devolviendo {len(tool_messages)} ToolMessages nuevos")
+        return {"messages": tool_messages}
