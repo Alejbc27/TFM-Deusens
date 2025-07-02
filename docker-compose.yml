@@ -204,12 +204,10 @@ services:
       - RAG_SERVICE_URL=http://search-api:8080/
       - DATABASE_URL=postgresql+psycopg://postgres:postgres@postgres:5432/hotel_barcelo_db
     depends_on:
-      qdrant:
-        condition: service_healthy
       ollama:
         condition: service_healthy
       api:
-        condition: service_completed_successfully
+        condition: service_started
     networks:
       - rag-network
       - postgres
