@@ -2,6 +2,7 @@ import os
 import re
 import logging
 import time
+import json  # ✅ AÑADIR IMPORT
 from datetime import datetime, timezone
 from flask import Flask, request, jsonify
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
@@ -145,6 +146,83 @@ def chat_with_agent():
                     
             except Exception as e:
                 logger.warning(f"Error verificando estado en Redis: {e}")
+
+        # ✅ DEBUG COMPLETO DE REDIS ANTES DE INVOCAR EL GRAFO
+        if redis_checkpointer:
+            try:
+                logger.info("🔍 ========== DEBUG REDIS COMPLETO ==========")
+                
+                # Verificar directamente en Redis
+                redis_key = f"agent_session:{thread_id}:default"
+                raw_data = redis_checkpointer.redis_client.get(redis_key)
+                
+                logger.info(f"🔍 [DEBUG] Redis key: {redis_key}")
+                logger.info(f"🔍 [DEBUG] Raw data exists: {bool(raw_data)}")
+                
+                if raw_data:
+                    logger.info(f"🔍 [DEBUG] Raw data length: {len(raw_data)} bytes")
+                    try:
+                        parsed_data = json.loads(raw_data)
+                        logger.info(f"🔍 [DEBUG] Parsed data keys: {list(parsed_data.keys())}")
+                        
+                        channel_values = parsed_data.get('channel_values', {})
+                        logger.info(f"🔍 [DEBUG] Channel values keys: {list(channel_values.keys())}")
+                        
+                        messages = channel_values.get('messages', [])
+                        logger.info(f"🔍 [DEBUG] Messages in Redis: {len(messages)}")
+                        
+                        for i, msg in enumerate(messages):
+                            if isinstance(msg, dict):
+                                logger.info(f"   [{i}] {msg.get('type', 'Unknown')}: {str(msg.get('content', ''))[:50]}...")
+                            else:
+                                logger.info(f"   [{i}] {type(msg)}: {str(msg)[:50]}...")
+                                
+                    except Exception as e:
+                        logger.error(f"🔍 [DEBUG] Error parsing Redis data: {e}")
+                        logger.info(f"🔍 [DEBUG] Raw data sample: {raw_data[:200]}...")
+                else:
+                    logger.info(f"🔍 [DEBUG] No data found in Redis for key: {redis_key}")
+                
+                # También verificar todas las keys relacionadas con este thread
+                pattern = f"agent_session:{thread_id}:*"
+                keys = list(redis_checkpointer.redis_client.scan_iter(match=pattern))
+                logger.info(f"🔍 [DEBUG] All keys for thread {thread_id}: {keys}")
+                
+                # Verificar metadata key
+                metadata_key = f"agent_session:meta:{thread_id}:default"
+                metadata_raw = redis_checkpointer.redis_client.get(metadata_key)
+                logger.info(f"🔍 [DEBUG] Metadata key: {metadata_key}")
+                logger.info(f"🔍 [DEBUG] Metadata exists: {bool(metadata_raw)}")
+                
+                if metadata_raw:
+                    try:
+                        metadata_parsed = json.loads(metadata_raw)
+                        logger.info(f"🔍 [DEBUG] Metadata: {metadata_parsed}")
+                    except Exception as e:
+                        logger.error(f"🔍 [DEBUG] Error parsing metadata: {e}")
+                
+                # Verificar get_tuple method directamente
+                logger.info(f"🔍 [DEBUG] Testing get_tuple method...")
+                try:
+                    tuple_result = redis_checkpointer.get_tuple(config)
+                    logger.info(f"🔍 [DEBUG] get_tuple result: {bool(tuple_result)}")
+                    
+                    if tuple_result:
+                        logger.info(f"🔍 [DEBUG] get_tuple checkpoint keys: {list(tuple_result.checkpoint.keys()) if tuple_result.checkpoint else 'None'}")
+                        if tuple_result.checkpoint and 'channel_values' in tuple_result.checkpoint:
+                            cv = tuple_result.checkpoint['channel_values']
+                            if 'messages' in cv:
+                                logger.info(f"🔍 [DEBUG] get_tuple messages count: {len(cv['messages'])}")
+                    else:
+                        logger.info(f"🔍 [DEBUG] get_tuple returned None")
+                        
+                except Exception as e:
+                    logger.error(f"🔍 [DEBUG] Error testing get_tuple: {e}")
+                
+                logger.info("🔍 ========== FIN DEBUG REDIS ==========")
+                    
+            except Exception as e:
+                logger.error(f"🔍 [DEBUG] Error accessing Redis: {e}")
 
         # Input para el grafo
         input_for_graph = {"messages": [HumanMessage(content=message)]}
