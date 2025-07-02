@@ -104,7 +104,6 @@ class RagAgent:
                     return 'continue'
                 else:
                     logger.warning(f"🔍 [Router] -> Tool desconocido: {tool_name}, ignorando")
-                    last_message.tool_calls = []
                     return 'end'
             
             # 🚨 WORKAROUND CRÍTICO: Verificar JSON content para Qwen
@@ -129,23 +128,25 @@ class RagAgent:
                             if tool_name in self._tools_map and isinstance(tool_args, dict):
                                 logger.info(f"🔧 [Router WORKAROUND] JSON -> Tool call: {tool_name}")
                                 
-                                # Convertir JSON a tool_call nativo
-                                last_message.tool_calls = [{
+                                # ✅ CREAR UNA NUEVA COPIA DEL MENSAJE EN LUGAR DE MODIFICAR EL ORIGINAL
+                                # Esto se aplica al mensaje en el flujo sin afectar a Redis
+                                tool_call_data = {
                                     "name": tool_name, 
                                     "args": tool_args, 
                                     "id": f"qwen_tc_{uuid.uuid4().hex}"
-                                }]
-                                last_message.content = ""  # Limpiar contenido JSON
+                                }
                                 
-                                logger.info(f"🔧 [Router WORKAROUND] Tool call reconstruido para: {tool_name}")
+                                # ✅ MARCAR EN STATE QUE HAY UN TOOL CALL PENDIENTE
+                                # Esto será procesado en agent_node
+                                state['_pending_tool_call'] = tool_call_data
+                                
+                                logger.info(f"🔧 [Router WORKAROUND] Tool call preparado: {tool_name}")
                                 return 'continue'
                             else:
                                 logger.warning(f"🔧 [Router WORKAROUND] Tool desconocido o args inválidos: {tool_name}")
                         
                         elif isinstance(content_json, dict) and "answer" in content_json:
                             logger.info("🔍 [Router] JSON con 'answer' detectado, respuesta directa")
-                            last_message.content = content_json["answer"]
-                            last_message.tool_calls = []
                             return 'end'
                             
                     except json.JSONDecodeError:
@@ -209,23 +210,31 @@ class RagAgent:
     def tools_node(self, state: AgentState) -> dict:
         """
         Nodo de herramientas que ejecuta las tool calls del agente.
-        
-        Args:
-            state: Estado actual del agente
-            
-        Returns:
-            Estado actualizado con los resultados de las herramientas
         """
         messages = state['messages']
         last_message = messages[-1] if messages else None
         
         logger.info("🔧 [Tools] Procesando herramientas...")
         
+        # ✅ VERIFICAR SI HAY TOOL CALL PENDIENTE DEL ROUTER
+        if '_pending_tool_call' in state:
+            logger.info("🔧 [Tools] Ejecutando tool call pendiente del router")
+            tool_call = state['_pending_tool_call']
+            tool_message = self._execute_tool_call(tool_call)
+            
+            # Limpiar el tool call pendiente y devolver resultado
+            new_messages = messages + [tool_message]
+            new_state = {**state, 'messages': new_messages}
+            if '_pending_tool_call' in new_state:
+                del new_state['_pending_tool_call']
+            
+            return new_state
+        
+        # ✅ FLUJO ORIGINAL PARA TOOL_CALLS NATIVOS
         if not self._has_valid_tool_calls(last_message):
             logger.error("🔧 No hay tool_calls válidos")
             return state
 
-        # Ejecutar herramientas
         tool_messages = []
         for tool_call in last_message.tool_calls:
             if isinstance(tool_call, dict):
