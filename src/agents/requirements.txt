@@ -4,3 +4,4 @@ langchain-ollama
 langchain_community
 langgraph
 qdrant-client
+pytest

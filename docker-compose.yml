@@ -218,6 +218,20 @@ services:
       - postgres
     restart: unless-stopped
 
+  agent-tests:
+    build:
+      context: .
+      dockerfile: src/agents/api/Dockerfile
+    command: >
+      sh -c "pytest src/agents/api/test_cases.py"
+    depends_on:
+      agent-api:
+        condition: service_started
+    networks:
+      - rag-network
+      - postgres
+    restart: "no"
+
   grafana: 
     image: grafana/grafana:latest
     container_name: grafana_container

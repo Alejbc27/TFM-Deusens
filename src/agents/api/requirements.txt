@@ -12,3 +12,4 @@ redis
 langchain-redis
 SQLAlchemy
 psycopg2-binary
+pytest
