@@ -223,8 +223,12 @@ services:
       context: .
       dockerfile: src/agents/api/Dockerfile
     command: >
-      sh -c "pytest src/agents/api/test_cases.py"
+      sh -c "sleep 15 && pytest src/agents/api/test_cases.py"
     depends_on:
+      ollama:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
       agent-api:
         condition: service_started
     networks:
