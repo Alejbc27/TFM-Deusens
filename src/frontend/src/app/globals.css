@@ -1,0 +1,68 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 233 64% 10%;
+    --foreground: 0 0% 98%;
+    --card: 233 64% 12%;
+    --card-foreground: 0 0% 98%;
+    --popover: 233 64% 10%;
+    --popover-foreground: 0 0% 98%;
+    --primary: 289 83% 55%;
+    --primary-foreground: 0 0% 98%;
+    --secondary: 233 64% 20%;
+    --secondary-foreground: 0 0% 98%;
+    --muted: 233 64% 20%;
+    --muted-foreground: 0 0% 63.9%;
+    --accent: 51 100% 50%;
+    --accent-foreground: 233 64% 10%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 233 64% 25%;
+    --input: 233 64% 15%;
+    --ring: 289 83% 65%;
+    --radius: 0.75rem;
+  }
+ 
+  .dark {
+    --background: 233 64% 10%;
+    --foreground: 0 0% 98%;
+    --card: 233 64% 12%;
+    --card-foreground: 0 0% 98%;
+    --popover: 233 64% 10%;
+    --popover-foreground: 0 0% 98%;
+    --primary: 289 83% 55%;
+    --primary-foreground: 0 0% 98%;
+    --secondary: 233 64% 20%;
+    --secondary-foreground: 0 0% 98%;
+    --muted: 233 64% 20%;
+    --muted-foreground: 0 0% 63.9%;
+    --accent: 51 100% 50%;
+    --accent-foreground: 233 64% 10%;
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 233 64% 25%;
+    --input: 233 64% 15%;
+    --ring: 289 83% 65%;
+  }
+}
+ 
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}
+
+@layer utilities {
+  .neon-text {
+    text-shadow:
+      0 0 5px hsl(var(--primary) / 0.8),
+      0 0 10px hsl(var(--primary) / 0.6),
+      0 0 20px hsl(var(--primary) / 0.4);
+  }
+}
