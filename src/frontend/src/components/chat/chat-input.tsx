@@ -13,16 +13,13 @@ interface ChatInputProps {
   handleSubmit: (e: FormEvent<HTMLFormElement>) => void;
   isLoading: boolean;
   aiTip: string | null;
-  fetchAiTip: (content: string) => void;
 }
 
-export function ChatInput({ input, setInput, handleSubmit, isLoading, aiTip, fetchAiTip }: ChatInputProps) {
+export function ChatInput({ input, setInput, handleSubmit, isLoading, aiTip }: ChatInputProps) {
   const debouncedInput = useDebounce(input, 500);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => {
-    fetchAiTip(debouncedInput);
-  }, [debouncedInput, fetchAiTip]);
+  // All ai-tips and Genkit references removed as part of cleanup.
   
   useEffect(() => {
     inputRef.current?.focus();

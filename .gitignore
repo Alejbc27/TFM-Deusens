@@ -42,7 +42,7 @@ yarn-error.log*
 next-env.d.ts
 
 # genkit
-.genkit/*
+# .genkit/* (Genkit removed from project)
 
 # environment files
 .env*

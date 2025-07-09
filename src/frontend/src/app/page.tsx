@@ -4,7 +4,7 @@ import { useState } from 'react';
 import type { FormEvent } from 'react';
 import { ChatLayout } from '@/components/chat/chat-layout';
 import { getAgentResponse } from '@/app/actions';
-import { getAiTips } from '@/ai/flows/ai-tips';
+// All ai-tips and Genkit references removed as part of cleanup.
 import type { Message } from '@/types';
 
 export default function Home() {
@@ -47,19 +47,7 @@ export default function Home() {
     setIsLoading(false);
   };
   
-  const fetchAiTip = async (content: string) => {
-    if (content.trim().length > 15 && !isLoading) {
-      try {
-        const result = await getAiTips({ messageContent: content });
-        setAiTip(result.tip);
-      } catch (error) {
-        console.error("Failed to get AI tip", error);
-        setAiTip(null);
-      }
-    } else {
-      setAiTip(null);
-    }
-  };
+  // fetchAiTip removed as part of Genkit/AI cleanup.
 
   return (
     <main className="flex h-[100dvh] flex-col items-center justify-center bg-background text-foreground font-body overflow-hidden">
@@ -75,7 +63,6 @@ export default function Home() {
         handleSubmit={handleSubmit}
         isLoading={isLoading}
         aiTip={aiTip}
-        fetchAiTip={fetchAiTip}
       />
     </main>
   );

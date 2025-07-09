@@ -1,0 +1,4 @@
+The following files were removed as part of Genkit/AI cleanup:
+- src/ai/dev.ts
+- src/ai/genkit.ts
+- src/ai/flows/ai-tips.ts

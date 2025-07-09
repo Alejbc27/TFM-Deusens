@@ -11,10 +11,9 @@ interface ChatLayoutProps {
   handleSubmit: (e: FormEvent<HTMLFormElement>) => void;
   isLoading: boolean;
   aiTip: string | null;
-  fetchAiTip: (content: string) => void;
 }
 
-export function ChatLayout({ messages, input, setInput, handleSubmit, isLoading, aiTip, fetchAiTip }: ChatLayoutProps) {
+export function ChatLayout({ messages, input, setInput, handleSubmit, isLoading, aiTip }: ChatLayoutProps) {
   return (
     <div className="relative z-10 flex flex-col w-full max-w-4xl h-[95dvh] max-h-[900px] border rounded-2xl shadow-2xl bg-card/50 backdrop-blur-md border-primary/20 shadow-primary/20">
       <ChatHeader />
@@ -25,7 +24,6 @@ export function ChatLayout({ messages, input, setInput, handleSubmit, isLoading,
         handleSubmit={handleSubmit}
         isLoading={isLoading}
         aiTip={aiTip}
-        fetchAiTip={fetchAiTip}
       />
     </div>
   );
