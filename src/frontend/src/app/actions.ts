@@ -7,8 +7,8 @@ export async function getAgentResponse(prompt: string): Promise<string> {
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ prompt }),
-      signal: AbortSignal.timeout(10000), 
+      body: JSON.stringify({ message: prompt }),
+      signal: AbortSignal.timeout(30000), 
     });
 
     if (!response.ok) {
