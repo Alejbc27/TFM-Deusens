@@ -1,11 +1,11 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import type { FormEvent } from 'react';
 import { ChatLayout } from '@/components/chat/chat-layout';
-import { getAgentResponse } from '@/app/actions';
-// All ai-tips and Genkit references removed as part of cleanup.
+import { getAgentResponse, getChatHistory } from '@/app/actions';
 import type { Message } from '@/types';
+import { v4 as uuidv4 } from 'uuid';
 
 export default function Home() {
   const [messages, setMessages] = useState<Message[]>([
@@ -18,10 +18,31 @@ export default function Home() {
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [aiTip, setAiTip] = useState<string | null>(null);
+  const [threadId, setThreadId] = useState<string | null>(null);
+
+  useEffect(() => {
+    let currentThreadId = localStorage.getItem('chatThreadId');
+    if (!currentThreadId) {
+      currentThreadId = uuidv4();
+      localStorage.setItem('chatThreadId', currentThreadId);
+    }
+    setThreadId(currentThreadId);
+
+    const fetchHistory = async () => {
+      if (currentThreadId) {
+        const history = await getChatHistory(currentThreadId);
+        if (history.length > 0) {
+          setMessages(history);
+        }
+      }
+    };
+
+    fetchHistory();
+  }, []);
 
   const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    if (!input.trim() || isLoading) return;
+    if (!input.trim() || isLoading || !threadId) return;
 
     const userMessage: Message = {
       id: `user-${Date.now()}`,
@@ -35,7 +56,7 @@ export default function Home() {
     setIsLoading(true);
     setAiTip(null);
 
-    const agentResponseContent = await getAgentResponse(currentInput);
+    const agentResponseContent = await getAgentResponse(currentInput, threadId);
 
     const agentMessage: Message = {
       id: `agent-${Date.now()}`,
@@ -46,11 +67,9 @@ export default function Home() {
     setMessages((prev) => [...prev, agentMessage]);
     setIsLoading(false);
   };
-  
-  // fetchAiTip removed as part of Genkit/AI cleanup.
 
   return (
-    <main className="flex h-[100dvh] flex-col items-center justify-center bg-background text-foreground font-body overflow-hidden">
+    <main className="relative flex h-screen overflow-hidden">
       <div className="absolute inset-0 z-0 opacity-30">
         <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,_#4a0e70_0,_transparent_60%)]"></div>
         <div className="absolute top-0 left-0 w-1/2 h-1/2 bg-[radial-gradient(circle_at_top_left,_#be29ec_0,_transparent_50%)] animate-pulse-slow"></div>
