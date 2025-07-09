@@ -218,6 +218,7 @@ services:
       - postgres
     restart: unless-stopped
 
+
   grafana: 
     image: grafana/grafana:latest
     container_name: grafana_container
@@ -231,6 +232,21 @@ services:
     networks:
       - postgres
     restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./src/frontend
+      dockerfile: Dockerfile
+    container_name: frontend_container
+    ports:
+      - "3100:3100"
+    environment:
+      - NEXT_PUBLIC_AGENT_API_URL=http://agent-api:8081
+      - NODE_ENV=production
+    depends_on:
+      - agent-api
+    networks:
+      - rag-network
 
 networks:
   postgres:
