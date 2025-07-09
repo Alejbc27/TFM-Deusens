@@ -2,7 +2,7 @@
 
 export async function getAgentResponse(prompt: string): Promise<string> {
   try {
-    const response = await fetch('http://localhost:8081/chat', {
+    const response = await fetch('http://agent-api:8081/chat', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -30,6 +30,6 @@ export async function getAgentResponse(prompt: string): Promise<string> {
     if (error.name === 'AbortError') {
         return 'Error: Connection to the agent timed out.';
     }
-    return 'Error: Could not connect to the agent. Please ensure it is running on http://localhost:8081 and accessible.';
+    return 'Error: Could not connect to the agent. Please ensure it is running on http://agent-api:8081 and accessible.';
   }
 }
